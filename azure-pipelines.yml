@@ -29,14 +29,25 @@ pr:
       - main
       - develop
 
+# =============================================================================
+# POOL DE AGENTES
+# =============================================================================
+# Opción 1: Agente de Microsoft (recomendado si no tienes agente propio)
 pool:
-  name: 'my-agent'
+  vmImage: 'ubuntu-latest'
+
+# Opción 2: Tu agente self-hosted (descomentar si lo tienes configurado)
+# pool:
+#   name: 'my-agent'
 
 # =============================================================================
 # VARIABLES
 # =============================================================================
 variables:
   # Azure Service Connection
+  # ⚠️ IMPORTANTE: Debes crear esta conexión en Azure DevOps:
+  #    Project Settings → Service connections → New → Azure Resource Manager
+  #    Nombre: azure-task-api (o cambia el valor abajo por el nombre de tu conexión)
   azureServiceConnection: 'azure-task-api'
   
   # Resource Group
@@ -94,6 +105,16 @@ stages:
               path: $(MAVEN_CACHE_FOLDER)
 
           # -------------------------------------------------------------------
+          # Instalar Java 17 (necesario para agentes hosted de Microsoft)
+          # -------------------------------------------------------------------
+          - task: JavaToolInstaller@0
+            displayName: '☕ Instalar Java 17'
+            inputs:
+              versionSpec: '17'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+
+          # -------------------------------------------------------------------
           # Verificar herramientas
           # -------------------------------------------------------------------
           - script: |
@@ -122,8 +143,8 @@ stages:
               mavenPomFile: 'pom.xml'
               goals: 'clean verify'
               options: '$(MAVEN_OPTS) -B -Dspring.profiles.active=test'
-              javaHomeOption: 'Path'
-              jdkDirectory: '$(JAVA_HOME)'
+              javaHomeOption: 'JDKVersion'
+              jdkVersionOption: '1.17'
               publishJUnitResults: true
               testResultsFiles: '**/surefire-reports/TEST-*.xml'
               codeCoverageToolOption: 'JaCoCo'
@@ -140,8 +161,8 @@ stages:
               mavenPomFile: 'pom.xml'
               goals: 'clean package'
               options: '$(MAVEN_OPTS) -B -DskipTests'
-              javaHomeOption: 'Path'
-              jdkDirectory: '$(JAVA_HOME)'
+              javaHomeOption: 'JDKVersion'
+              jdkVersionOption: '1.17'
             condition: ne(variables['runTests'], 'true')
 
           # -------------------------------------------------------------------
