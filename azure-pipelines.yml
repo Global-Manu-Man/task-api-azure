@@ -8,6 +8,7 @@
 # - Health checks después de cada deploy
 # - Notificaciones de estado
 # - Limpieza de artefactos antiguos
+# - DownloadPipelineArtifact@2 (más estable)
 # =============================================================================
 
 trigger:
@@ -250,18 +251,30 @@ stages:
           runOnce:
             deploy:
               steps:
-                # Descargar artefacto
-                - download: current
-                  artifact: $(artifactName)
+                # -----------------------------------------------------------
+                # Descargar artefacto (versión mejorada)
+                # -----------------------------------------------------------
+                - task: DownloadPipelineArtifact@2
                   displayName: '📥 Descargar artefacto'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: '$(artifactName)'
+                    targetPath: '$(Pipeline.Workspace)/$(artifactName)'
 
-                # Listar archivos descargados
+                # -----------------------------------------------------------
+                # Verificar artefactos descargados
+                # -----------------------------------------------------------
                 - script: |
-                    echo "=== Archivos descargados ==="
+                    echo "=== Verificando contenido del artefacto ==="
+                    find $(Pipeline.Workspace) -name "*.jar" -type f
+                    echo ""
+                    echo "=== Estructura de directorios ==="
                     ls -la $(Pipeline.Workspace)/$(artifactName)/
-                  displayName: '📋 Listar artefactos'
+                  displayName: '🔎 Verificar artefactos descargados'
 
+                # -----------------------------------------------------------
                 # Deploy a Azure App Service Staging
+                # -----------------------------------------------------------
                 - task: AzureWebApp@1
                   displayName: '☁️ Deploy a App Service Staging'
                   inputs:
@@ -272,13 +285,17 @@ stages:
                     runtimeStack: 'JAVA|17-java17'
                     startUpCommand: ''
 
+                # -----------------------------------------------------------
                 # Esperar que la aplicación inicie
+                # -----------------------------------------------------------
                 - script: |
                     echo "=== Esperando que la aplicación inicie (60s) ==="
                     sleep 60
                   displayName: '⏳ Esperar inicio de aplicación'
 
+                # -----------------------------------------------------------
                 # Health Check
+                # -----------------------------------------------------------
                 - script: |
                     echo "=== Health Check Staging ==="
                     echo "URL: $(stagingUrl)/actuator/health"
@@ -303,7 +320,9 @@ stages:
                   displayName: '❤️ Health Check Staging'
                   continueOnError: 'true'
 
+                # -----------------------------------------------------------
                 # Verificar Swagger
+                # -----------------------------------------------------------
                 - script: |
                     echo "=== Verificando Swagger UI ==="
                     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $(stagingUrl)/swagger-ui.html || echo "000")
@@ -396,12 +415,30 @@ stages:
           runOnce:
             deploy:
               steps:
-                # Descargar artefacto
-                - download: current
-                  artifact: $(artifactName)
+                # -----------------------------------------------------------
+                # Descargar artefacto (versión mejorada)
+                # -----------------------------------------------------------
+                - task: DownloadPipelineArtifact@2
                   displayName: '📥 Descargar artefacto'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: '$(artifactName)'
+                    targetPath: '$(Pipeline.Workspace)/$(artifactName)'
 
+                # -----------------------------------------------------------
+                # Verificar artefactos descargados
+                # -----------------------------------------------------------
+                - script: |
+                    echo "=== Verificando contenido del artefacto ==="
+                    find $(Pipeline.Workspace) -name "*.jar" -type f
+                    echo ""
+                    echo "=== Estructura de directorios ==="
+                    ls -la $(Pipeline.Workspace)/$(artifactName)/
+                  displayName: '🔎 Verificar artefactos descargados'
+
+                # -----------------------------------------------------------
                 # Deploy a Azure App Service Production
+                # -----------------------------------------------------------
                 - task: AzureWebApp@1
                   displayName: '☁️ Deploy a App Service Production'
                   inputs:
@@ -411,13 +448,17 @@ stages:
                     package: '$(Pipeline.Workspace)/$(artifactName)/*.jar'
                     runtimeStack: 'JAVA|17-java17'
 
+                # -----------------------------------------------------------
                 # Esperar inicio
+                # -----------------------------------------------------------
                 - script: |
                     echo "=== Esperando que la aplicación inicie (90s) ==="
                     sleep 90
                   displayName: '⏳ Esperar inicio de aplicación'
 
+                # -----------------------------------------------------------
                 # Health Check Production
+                # -----------------------------------------------------------
                 - script: |
                     echo "=== Health Check Production ==="
                     
@@ -439,7 +480,9 @@ stages:
                     exit 1
                   displayName: '❤️ Health Check Production'
 
+                # -----------------------------------------------------------
                 # Resumen final
+                # -----------------------------------------------------------
                 - script: |
                     echo "=========================================="
                     echo "     🎉 DEPLOY COMPLETADO EXITOSAMENTE    "
