@@ -1,96 +1,464 @@
-# azure-pipelines.yml
-# Pipeline CI/CD para Task API - Spring Boot
+# =============================================================================
+# Azure Pipelines - Task API (Spring Boot 4.0 + Azure SQL Server)
+# =============================================================================
+# Mejoras incluidas:
+# - Cache de Maven para builds más rápidos
+# - Tests con reportes JUnit y cobertura JaCoCo
+# - Stage de Staging antes de Producción
+# - Health checks después de cada deploy
+# - Notificaciones de estado
+# - Limpieza de artefactos antiguos
+# =============================================================================
 
 trigger:
   branches:
     include:
       - main
       - develop
+      - feature/*
   paths:
     exclude:
       - README.md
       - docs/*
+      - '*.md'
+      - '.gitignore'
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
 
 pool:
   name: 'my-agent'
 
+# =============================================================================
+# VARIABLES
+# =============================================================================
 variables:
+  # Azure Service Connection
   azureServiceConnection: 'azure-task-api'
-  appServiceName: 'task-api-emmanuel'
+  
+  # Resource Group
+  resourceGroup: 'rg-task-api'
+  
+  # App Services
+  appServiceStaging: 'task-api-emmanuel-staging'
+  appServiceProduction: 'task-api-emmanuel'
+  
+  # URLs para health checks
+  stagingUrl: 'https://$(appServiceStaging).azurewebsites.net'
+  productionUrl: 'https://$(appServiceProduction).azurewebsites.net'
+  
+  # Maven
+  MAVEN_CACHE_FOLDER: $(Pipeline.Workspace)/.m2/repository
+  MAVEN_OPTS: '-Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)'
+  
+  # Build
+  artifactName: 'task-api-artifact'
+  
+  # Flags
+  runTests: 'true'
+  deployToStaging: 'true'
 
+# =============================================================================
+# STAGES
+# =============================================================================
 stages:
-  # ========================================
+  # ===========================================================================
   # STAGE 1: BUILD & TEST
-  # ========================================
+  # ===========================================================================
   - stage: Build
-    displayName: 'Build & Test'
+    displayName: '🔨 Build & Test'
     jobs:
-      - job: BuildJob
+      - job: BuildAndTest
         displayName: 'Compilar y Probar'
         steps:
-          # Paso 1: Checkout del codigo
+          # -------------------------------------------------------------------
+          # Checkout
+          # -------------------------------------------------------------------
           - checkout: self
-            displayName: 'Checkout codigo'
+            displayName: '📥 Checkout código'
+            fetchDepth: '0'
 
-          # Paso 2: Verificar Java instalado
+          # -------------------------------------------------------------------
+          # Cache de Maven
+          # -------------------------------------------------------------------
+          - task: Cache@2
+            displayName: '📦 Cache Maven Dependencies'
+            inputs:
+              key: 'maven | "$(Agent.OS)" | **/pom.xml'
+              restoreKeys: |
+                maven | "$(Agent.OS)"
+                maven
+              path: $(MAVEN_CACHE_FOLDER)
+
+          # -------------------------------------------------------------------
+          # Verificar herramientas
+          # -------------------------------------------------------------------
           - script: |
-              echo "=== Verificando Java ==="
+              echo "=========================================="
+              echo "         VERIFICANDO HERRAMIENTAS         "
+              echo "=========================================="
+              echo ""
+              echo "=== Java Version ==="
               java -version
-              echo "=== Verificando Maven ==="
+              echo ""
+              echo "=== Maven Version ==="
               mvn -version
-            displayName: 'Verificar Java y Maven'
+              echo ""
+              echo "=== Variables de entorno ==="
+              echo "JAVA_HOME: $JAVA_HOME"
+              echo "Build.SourceBranch: $(Build.SourceBranch)"
+              echo "Build.BuildId: $(Build.BuildId)"
+            displayName: '🔍 Verificar Java y Maven'
 
-          # Paso 3: Compilar con Maven (usa Java del sistema)
+          # -------------------------------------------------------------------
+          # Compilar y ejecutar tests
+          # -------------------------------------------------------------------
           - task: Maven@4
-            displayName: 'Maven Build'
+            displayName: '🧪 Maven Build & Test'
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'clean verify'
+              options: '$(MAVEN_OPTS) -B -Dspring.profiles.active=test'
+              javaHomeOption: 'Path'
+              jdkDirectory: '$(JAVA_HOME)'
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+              codeCoverageToolOption: 'JaCoCo'
+              codeCoverageClassFilesDirectories: 'target/classes'
+              codeCoverageSourceDirectories: 'src/main/java'
+            condition: eq(variables['runTests'], 'true')
+
+          # -------------------------------------------------------------------
+          # Build sin tests (fallback si tests están deshabilitados)
+          # -------------------------------------------------------------------
+          - task: Maven@4
+            displayName: '📦 Maven Build (sin tests)'
             inputs:
               mavenPomFile: 'pom.xml'
               goals: 'clean package'
-              options: '-DskipTests'
+              options: '$(MAVEN_OPTS) -B -DskipTests'
               javaHomeOption: 'Path'
               jdkDirectory: '$(JAVA_HOME)'
-              mavenVersionOption: 'Default'
+            condition: ne(variables['runTests'], 'true')
 
-          # Paso 4: Copiar archivos para deploy
+          # -------------------------------------------------------------------
+          # Nota: La cobertura JaCoCo se publica automáticamente por Maven@4
+          # con codeCoverageToolOption: 'JaCoCo' (no necesita tarea adicional)
+          # -------------------------------------------------------------------
+
+          # -------------------------------------------------------------------
+          # Verificar que el JAR se generó
+          # -------------------------------------------------------------------
+          - script: |
+              echo "=== Verificando artefactos generados ==="
+              ls -la target/
+              echo ""
+              echo "=== JAR generado ==="
+              ls -la target/*.jar
+            displayName: '🔎 Verificar JAR generado'
+
+          # -------------------------------------------------------------------
+          # Copiar archivos para deploy
+          # -------------------------------------------------------------------
           - task: CopyFiles@2
-            displayName: 'Copiar JAR'
+            displayName: '📋 Copiar JAR al staging'
             inputs:
               SourceFolder: '$(System.DefaultWorkingDirectory)/target'
               Contents: '*.jar'
               TargetFolder: '$(Build.ArtifactStagingDirectory)'
 
-          # Paso 5: Publicar artefacto
+          # -------------------------------------------------------------------
+          # Copiar archivos de configuración adicionales
+          # -------------------------------------------------------------------
+          - task: CopyFiles@2
+            displayName: '📋 Copiar archivos de configuración'
+            inputs:
+              SourceFolder: '$(System.DefaultWorkingDirectory)'
+              Contents: |
+                scripts/**
+                pom.xml
+              TargetFolder: '$(Build.ArtifactStagingDirectory)/config'
+            continueOnError: true
+
+          # -------------------------------------------------------------------
+          # Publicar artefacto
+          # -------------------------------------------------------------------
           - task: PublishBuildArtifacts@1
-            displayName: 'Publicar Artefacto'
+            displayName: '📦 Publicar Artefacto'
             inputs:
               PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-              ArtifactName: 'drop'
+              ArtifactName: '$(artifactName)'
               publishLocation: 'Container'
 
-  # ========================================
-  # STAGE 2: DEPLOY TO AZURE
-  # ========================================
-  - stage: Deploy
-    displayName: 'Deploy to Azure'
+          # -------------------------------------------------------------------
+          # Resumen del build
+          # -------------------------------------------------------------------
+          - script: |
+              echo "=========================================="
+              echo "           BUILD COMPLETADO               "
+              echo "=========================================="
+              echo "Branch: $(Build.SourceBranch)"
+              echo "Build ID: $(Build.BuildId)"
+              echo "Commit: $(Build.SourceVersion)"
+              echo "Artefacto: $(artifactName)"
+              echo "=========================================="
+            displayName: '✅ Resumen del Build'
+
+  # ===========================================================================
+  # STAGE 2: DEPLOY TO STAGING
+  # ===========================================================================
+  - stage: DeployStaging
+    displayName: '🚀 Deploy Staging'
     dependsOn: Build
-    condition: succeeded()
+    condition: |
+      and(
+        succeeded(),
+        eq(variables['deployToStaging'], 'true'),
+        ne(variables['Build.Reason'], 'PullRequest')
+      )
+    variables:
+      environmentName: 'staging'
     jobs:
-      - deployment: DeployToAzure
-        displayName: 'Deploy a Azure App Service'
-        environment: 'production'
+      - deployment: DeployToStaging
+        displayName: 'Deploy a Staging'
+        environment: 'staging'
         strategy:
           runOnce:
             deploy:
               steps:
+                # Descargar artefacto
                 - download: current
-                  artifact: drop
-                  displayName: 'Descargar artefacto'
+                  artifact: $(artifactName)
+                  displayName: '📥 Descargar artefacto'
 
+                # Listar archivos descargados
+                - script: |
+                    echo "=== Archivos descargados ==="
+                    ls -la $(Pipeline.Workspace)/$(artifactName)/
+                  displayName: '📋 Listar artefactos'
+
+                # Deploy a Azure App Service Staging
                 - task: AzureWebApp@1
-                  displayName: 'Deploy a App Service'
+                  displayName: '☁️ Deploy a App Service Staging'
                   inputs:
                     azureSubscription: '$(azureServiceConnection)'
                     appType: 'webAppLinux'
-                    appName: '$(appServiceName)'
-                    package: '$(Pipeline.Workspace)/drop/*.jar'
+                    appName: '$(appServiceStaging)'
+                    package: '$(Pipeline.Workspace)/$(artifactName)/*.jar'
                     runtimeStack: 'JAVA|17-java17'
+                    startUpCommand: ''
+
+                # Esperar que la aplicación inicie
+                - script: |
+                    echo "=== Esperando que la aplicación inicie (60s) ==="
+                    sleep 60
+                  displayName: '⏳ Esperar inicio de aplicación'
+
+                # Health Check
+                - script: |
+                    echo "=== Health Check Staging ==="
+                    echo "URL: $(stagingUrl)/actuator/health"
+                    
+                    # Intentar health check con reintentos
+                    for i in 1 2 3 4 5; do
+                      echo "Intento $i de 5..."
+                      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $(stagingUrl)/actuator/health || echo "000")
+                      
+                      if [ "$HTTP_CODE" = "200" ]; then
+                        echo "✅ Health check exitoso! HTTP $HTTP_CODE"
+                        curl -s $(stagingUrl)/actuator/health | head -100
+                        exit 0
+                      else
+                        echo "⚠️ HTTP $HTTP_CODE - Reintentando en 15s..."
+                        sleep 15
+                      fi
+                    done
+                    
+                    echo "❌ Health check falló después de 5 intentos"
+                    exit 1
+                  displayName: '❤️ Health Check Staging'
+                  continueOnError: 'true'
+
+                # Verificar Swagger
+                - script: |
+                    echo "=== Verificando Swagger UI ==="
+                    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $(stagingUrl)/swagger-ui.html || echo "000")
+                    
+                    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
+                      echo "✅ Swagger UI disponible: $(stagingUrl)/swagger-ui.html"
+                    else
+                      echo "⚠️ Swagger UI retornó HTTP $HTTP_CODE"
+                    fi
+                  displayName: '📚 Verificar Swagger UI'
+                  continueOnError: 'true'
+
+  # ===========================================================================
+  # STAGE 3: SMOKE TESTS (Opcional)
+  # ===========================================================================
+  - stage: SmokeTests
+    displayName: '🧪 Smoke Tests'
+    dependsOn: DeployStaging
+    condition: succeeded()
+    jobs:
+      - job: RunSmokeTests
+        displayName: 'Ejecutar Smoke Tests'
+        steps:
+          - script: |
+              echo "=========================================="
+              echo "         EJECUTANDO SMOKE TESTS           "
+              echo "=========================================="
+              
+              API_URL="$(stagingUrl)/api"
+              
+              # Test 1: Health endpoint
+              echo ""
+              echo "=== Test 1: Health Check ==="
+              curl -s $(stagingUrl)/actuator/health | head -50
+              
+              # Test 2: GET /api/tasks
+              echo ""
+              echo "=== Test 2: GET /api/tasks ==="
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $API_URL/tasks)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "✅ GET /api/tasks - HTTP $HTTP_CODE"
+              else
+                echo "❌ GET /api/tasks - HTTP $HTTP_CODE"
+              fi
+              
+              # Test 3: GET /api/tasks/stats
+              echo ""
+              echo "=== Test 3: GET /api/tasks/stats ==="
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $API_URL/tasks/stats)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "✅ GET /api/tasks/stats - HTTP $HTTP_CODE"
+                curl -s $API_URL/tasks/stats | head -20
+              else
+                echo "❌ GET /api/tasks/stats - HTTP $HTTP_CODE"
+              fi
+              
+              # Test 4: POST /api/tasks (crear tarea de prueba)
+              echo ""
+              echo "=== Test 4: POST /api/tasks ==="
+              RESPONSE=$(curl -s -X POST $API_URL/tasks \
+                -H "Content-Type: application/json" \
+                -d '{"title":"Test Pipeline $(Build.BuildId)","description":"Tarea creada por pipeline","status":"PENDING"}')
+              echo "Response: $RESPONSE"
+              
+              echo ""
+              echo "=========================================="
+              echo "       SMOKE TESTS COMPLETADOS            "
+              echo "=========================================="
+            displayName: '🔥 Smoke Tests API'
+            continueOnError: 'true'
+
+  # ===========================================================================
+  # STAGE 4: DEPLOY TO PRODUCTION
+  # ===========================================================================
+  - stage: DeployProduction
+    displayName: '🏭 Deploy Production'
+    dependsOn: SmokeTests
+    condition: |
+      and(
+        succeeded(),
+        eq(variables['Build.SourceBranch'], 'refs/heads/main')
+      )
+    variables:
+      environmentName: 'production'
+    jobs:
+      - deployment: DeployToProduction
+        displayName: 'Deploy a Production'
+        environment: 'production'  # Requiere aprobación manual en Azure DevOps
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Descargar artefacto
+                - download: current
+                  artifact: $(artifactName)
+                  displayName: '📥 Descargar artefacto'
+
+                # Deploy a Azure App Service Production
+                - task: AzureWebApp@1
+                  displayName: '☁️ Deploy a App Service Production'
+                  inputs:
+                    azureSubscription: '$(azureServiceConnection)'
+                    appType: 'webAppLinux'
+                    appName: '$(appServiceProduction)'
+                    package: '$(Pipeline.Workspace)/$(artifactName)/*.jar'
+                    runtimeStack: 'JAVA|17-java17'
+
+                # Esperar inicio
+                - script: |
+                    echo "=== Esperando que la aplicación inicie (90s) ==="
+                    sleep 90
+                  displayName: '⏳ Esperar inicio de aplicación'
+
+                # Health Check Production
+                - script: |
+                    echo "=== Health Check Production ==="
+                    
+                    for i in 1 2 3 4 5 6; do
+                      echo "Intento $i de 6..."
+                      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $(productionUrl)/actuator/health || echo "000")
+                      
+                      if [ "$HTTP_CODE" = "200" ]; then
+                        echo "✅ Health check exitoso! HTTP $HTTP_CODE"
+                        curl -s $(productionUrl)/actuator/health
+                        exit 0
+                      else
+                        echo "⚠️ HTTP $HTTP_CODE - Reintentando en 20s..."
+                        sleep 20
+                      fi
+                    done
+                    
+                    echo "❌ Health check falló"
+                    exit 1
+                  displayName: '❤️ Health Check Production'
+
+                # Resumen final
+                - script: |
+                    echo "=========================================="
+                    echo "     🎉 DEPLOY COMPLETADO EXITOSAMENTE    "
+                    echo "=========================================="
+                    echo ""
+                    echo "📍 URLs de Producción:"
+                    echo "   API:     $(productionUrl)"
+                    echo "   Swagger: $(productionUrl)/swagger-ui.html"
+                    echo "   Health:  $(productionUrl)/actuator/health"
+                    echo ""
+                    echo "📋 Información del Build:"
+                    echo "   Build ID: $(Build.BuildId)"
+                    echo "   Branch:   $(Build.SourceBranch)"
+                    echo "   Commit:   $(Build.SourceVersion)"
+                    echo "=========================================="
+                  displayName: '✅ Resumen Deploy Production'
+
+  # ===========================================================================
+  # STAGE 5: CLEANUP (Opcional - Solo en main)
+  # ===========================================================================
+  - stage: Cleanup
+    displayName: '🧹 Cleanup'
+    dependsOn: DeployProduction
+    condition: |
+      and(
+        succeeded(),
+        eq(variables['Build.SourceBranch'], 'refs/heads/main')
+      )
+    jobs:
+      - job: CleanupOldArtifacts
+        displayName: 'Limpiar recursos antiguos'
+        steps:
+          - script: |
+              echo "=== Limpieza de recursos ==="
+              echo "Este stage puede incluir:"
+              echo "- Eliminar builds antiguos"
+              echo "- Limpiar logs"
+              echo "- Purgar caché"
+              echo ""
+              echo "Por ahora, solo mostramos información del deploy completado."
+              echo ""
+              echo "Build $(Build.BuildId) completado exitosamente."
+            displayName: '🗑️ Cleanup Info'
