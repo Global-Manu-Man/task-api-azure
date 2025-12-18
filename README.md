@@ -3,7 +3,7 @@
 API REST para la gestión de tareas desarrollada con **Spring Boot 4.0** y **Java 17**.
 
 [![Build Status](https://dev.azure.com/sandoval-org/task-api/_apis/build/status/task-api?branchName=main)](https://dev.azure.com/sandoval-org/task-api/_build)
-[![Azure App Service](https://img.shields.io/badge/Azure-Deployed-blue)](https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net)
+[![Azure App Service](https://img.shields.io/badge/Azure-Deployed-blue)](https://task-api-emmanuel.azurewebsites.net)
 
 ---
 
@@ -11,11 +11,12 @@ API REST para la gestión de tareas desarrollada con **Spring Boot 4.0** y **Jav
 
 | Recurso | URL |
 |---------|-----|
-| **API Base** | [https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net](https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net) |
-| **Swagger UI** | [https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net/swagger-ui.html](https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net/swagger-ui.html) |
-| **OpenAPI Spec** | [https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net/api-docs](https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net/api-docs) |
+| **API Base (Production)** | [https://task-api-emmanuel.azurewebsites.net](https://task-api-emmanuel.azurewebsites.net) |
+| **API Base (Staging)** | [https://task-api-emmanuel-staging.azurewebsites.net](https://task-api-emmanuel-staging.azurewebsites.net) |
+| **Swagger UI** | [https://task-api-emmanuel.azurewebsites.net/swagger-ui.html](https://task-api-emmanuel.azurewebsites.net/swagger-ui.html) |
+| **OpenAPI Spec** | [https://task-api-emmanuel.azurewebsites.net/api-docs](https://task-api-emmanuel.azurewebsites.net/api-docs) |
 | **Azure DevOps** | [https://dev.azure.com/sandoval-org/task-api](https://dev.azure.com/sandoval-org/task-api) |
-| **Azure SpringDoc** | [https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net/](https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net/swagger-ui/index.html) |
+
 ---
 
 ## 📖 Tabla de Contenidos
@@ -30,7 +31,8 @@ API REST para la gestión de tareas desarrollada con **Spring Boot 4.0** y **Jav
 8. [Arquitectura y Patrones de Diseño](#-arquitectura-y-patrones-de-diseño)
 9. [Estructura del Proyecto](#-estructura-del-proyecto)
 10. [CI/CD Pipeline](#-cicd-pipeline)
-11. [Tecnologías Utilizadas](#-tecnologías-utilizadas)
+11. [Configuración de Azure DevOps](#-configuración-de-azure-devops)
+12. [Tecnologías Utilizadas](#-tecnologías-utilizadas)
 
 ---
 
@@ -161,7 +163,7 @@ java -jar target/yaganaste.com-0.0.1-SNAPSHOT.jar --spring.profiles.active=prod
 Una vez iniciada la aplicación, verifica que funciona:
 
 ```bash
-# Health check
+# Verificar API
 curl http://localhost:8080/api/tasks
 
 # O abre en el navegador
@@ -579,7 +581,7 @@ curl http://localhost:8080/api/tasks/stats
 ```
 task-api/
 ├── 📄 pom.xml                              # Configuración Maven
-├── 📄 azure-pipelines.yml                  # Pipeline CI/CD
+├── 📄 azure-pipelines.yml                  # Pipeline CI/CD (5 stages)
 ├── 📄 README.md                            # Este archivo
 │
 ├── 📂 src/main/java/com/tasks/.../
@@ -608,16 +610,143 @@ task-api/
 
 ## 🔄 CI/CD Pipeline
 
-El proyecto utiliza **Azure Pipelines** para integración y despliegue continuo.
+El proyecto utiliza **Azure Pipelines** para integración y despliegue continuo con un pipeline de **5 stages**.
+
+### Diagrama del Pipeline
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   COMMIT    │───▶│    BUILD    │───▶│   DEPLOY    │
-│   (main)    │    │   & TEST    │    │   (Azure)   │
-└─────────────┘    └─────────────┘    └─────────────┘
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   🔨 BUILD   │───▶│ 🚀 STAGING   │───▶│ 🧪 SMOKE     │───▶│ 🏭 PRODUCTION│───▶│ 🧹 CLEANUP   │
+│   & TEST     │    │   DEPLOY     │    │   TESTS      │    │   DEPLOY     │    │              │
+└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+      │                   │                   │                    │                   │
+      ▼                   ▼                   ▼                    ▼                   ▼
+ ┌──────────┐       ┌──────────┐       ┌──────────┐        ┌──────────┐        ┌──────────┐
+ │• Compile │       │• Deploy  │       │• GET     │        │• Manual  │        │• Log     │
+ │• Test    │       │  to App  │       │  /tasks  │        │  Approval│        │  cleanup │
+ │• JaCoCo  │       │  Service │       │• POST    │        │• Deploy  │        │          │
+ │• Package │       │• Verify  │       │  /tasks  │        │• Verify  │        │          │
+ └──────────┘       └──────────┘       └──────────┘        └──────────┘        └──────────┘
 ```
 
-- **Azure DevOps Pipeline**: [https://dev.azure.com/sandoval-org/task-api/_build](https://dev.azure.com/sandoval-org/task-api/_build)
+### Stages del Pipeline
+
+| Stage | Descripción | Trigger |
+|-------|-------------|---------|
+| **🔨 Build & Test** | Compila, ejecuta tests, genera cobertura JaCoCo, empaqueta JAR | Automático en push |
+| **🚀 Deploy Staging** | Despliega a App Service de staging | Después de Build exitoso |
+| **🧪 Smoke Tests** | Pruebas de humo contra la API en staging | Después de Deploy Staging |
+| **🏭 Deploy Production** | Despliega a producción (requiere aprobación manual) | Solo desde `main` |
+| **🧹 Cleanup** | Limpieza de recursos | Después de Deploy Production |
+
+### Características del Pipeline
+
+| Característica | Descripción |
+|----------------|-------------|
+| **Cache de Maven** | Reduce tiempo de build ~40% |
+| **Tests con JaCoCo** | Reportes de cobertura de código |
+| **Agente Microsoft** | `ubuntu-latest` (no requiere agente propio) |
+| **Java 17** | Instalación automática con `JavaToolInstaller@0` |
+| **Environments** | `staging` (auto) y `production` (aprobación manual) |
+| **Verificación de App** | Verifica `/api/tasks` (compatible con Plan Free) |
+
+### Nota sobre Plan Free de Azure
+
+> ⚠️ El Plan Free de Azure App Service **no soporta Health Checks de Actuator**. Por eso el pipeline verifica la disponibilidad de la app usando el endpoint `/api/tasks` en lugar de `/actuator/health`.
+
+---
+
+## ⚙️ Configuración de Azure DevOps
+
+### 1. Service Connection (Requerido)
+
+Para que el pipeline pueda desplegar a Azure, necesitas crear una **Service Connection**:
+
+1. Ve a **Project Settings** → **Service connections**
+2. Click en **New service connection**
+3. Selecciona **Azure Resource Manager** → **Next**
+4. Selecciona **Service principal (automatic)**
+5. Configura:
+   - **Subscription**: Tu suscripción de Azure
+   - **Resource group**: `rg-task-api`
+   - **Service connection name**: `azure-task-api`
+   - ☑️ **Grant access permission to all pipelines**
+6. Click en **Save**
+
+### 2. Environments
+
+Crea los environments para controlar los deploys:
+
+**Staging (sin aprobación):**
+1. Ve a **Pipelines** → **Environments**
+2. Click en **New environment**
+3. Nombre: `staging`
+4. Sin configurar aprobaciones
+
+**Production (con aprobación manual):**
+1. Ve a **Pipelines** → **Environments**
+2. Click en **New environment**
+3. Nombre: `production`
+4. Después de crear, click en el environment → **⋮** → **Approvals and checks**
+5. Click en **+** → **Approvals**
+6. Agrega los usuarios que pueden aprobar deploys a producción
+
+### 3. Variables del Pipeline
+
+El pipeline usa las siguientes variables (ya configuradas en `azure-pipelines.yml`):
+
+| Variable | Valor | Descripción |
+|----------|-------|-------------|
+| `azureServiceConnection` | `azure-task-api` | Nombre de la Service Connection |
+| `resourceGroup` | `rg-task-api` | Resource Group en Azure |
+| `appServiceStaging` | `task-api-emmanuel-staging` | App Service de staging |
+| `appServiceProduction` | `task-api-emmanuel` | App Service de producción |
+
+### 4. App Services en Azure
+
+Asegúrate de tener creados los App Services:
+
+```bash
+# Crear Resource Group (si no existe)
+az group create --name rg-task-api --location centralus
+
+# Crear App Service Plan (Free tier)
+az appservice plan create \
+  --name asp-task-api \
+  --resource-group rg-task-api \
+  --sku F1 \
+  --is-linux
+
+# Crear App Service de Staging
+az webapp create \
+  --name task-api-emmanuel-staging \
+  --resource-group rg-task-api \
+  --plan asp-task-api \
+  --runtime "JAVA:17-java17"
+
+# Crear App Service de Production
+az webapp create \
+  --name task-api-emmanuel \
+  --resource-group rg-task-api \
+  --plan asp-task-api \
+  --runtime "JAVA:17-java17"
+```
+
+### 5. Variables de Entorno en App Services
+
+Configura las variables de entorno para la base de datos:
+
+```bash
+az webapp config appsettings set \
+  --name task-api-emmanuel \
+  --resource-group rg-task-api \
+  --settings \
+    SPRING_PROFILES_ACTIVE=prod \
+    DB_SERVER=tu-servidor \
+    DB_NAME=taskdb \
+    DB_USERNAME=tu-usuario \
+    DB_PASSWORD=tu-password
+```
 
 ---
 
@@ -634,8 +763,9 @@ El proyecto utiliza **Azure Pipelines** para integración y despliegue continuo.
 | SpringDoc OpenAPI | 2.8.0 | Documentación Swagger |
 | HikariCP | 7.x | Connection Pool |
 | Maven | 3.9+ | Gestión de dependencias |
-| Azure App Service | - | Hosting |
-| Azure Pipelines | - | CI/CD |
+| Azure App Service | - | Hosting (Plan Free) |
+| Azure Pipelines | - | CI/CD (5 stages) |
+| JaCoCo | - | Cobertura de código |
 
 ---
 
@@ -650,7 +780,12 @@ mvn test -Dtest=TaskControllerTest
 
 # Ejecutar tests de integración
 mvn test -Dtest=TaskControllerIntegrationTest
+
+# Ejecutar tests con cobertura JaCoCo
+mvn verify
 ```
+
+El reporte de cobertura se genera en: `target/site/jacoco/index.html`
 
 ---
 
@@ -671,7 +806,8 @@ mvn test -Dtest=TaskControllerIntegrationTest
 **Emmanuel Sandoval Morales**
 
 - Azure DevOps: [sandoval-org/task-api](https://dev.azure.com/sandoval-org/task-api)
-- API URL: [task-api-emmanuel](https://task-api-emmanuel-fqdegpgedaemcxc2.centralus-01.azurewebsites.net)
+- API Production: [task-api-emmanuel](https://task-api-emmanuel.azurewebsites.net)
+- API Staging: [task-api-emmanuel-staging](https://task-api-emmanuel-staging.azurewebsites.net)
 
 ---
 
