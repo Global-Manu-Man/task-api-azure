@@ -316,7 +316,7 @@ stages:
                     echo "⚠️ App no respondió después de 5 intentos (continuando...)"
                     exit 0
                   displayName: '🔍 Verificar App Staging'
-                  continueOnError: true
+                  continueOnError: 'true'
 
                 # -----------------------------------------------------------
                 # Verificar Swagger
@@ -385,7 +385,7 @@ stages:
               echo "       SMOKE TESTS COMPLETADOS            "
               echo "=========================================="
             displayName: '🔥 Smoke Tests API'
-            continueOnError: true
+            continueOnError: 'true'
 
   # ===========================================================================
   # STAGE 4: DEPLOY TO PRODUCTION
@@ -471,7 +471,7 @@ stages:
                     echo "⚠️ App no respondió como esperado (verificar logs)"
                     exit 0
                   displayName: '🔍 Verificar App Production'
-                  continueOnError: true
+                  continueOnError: 'true'
 
                 # -----------------------------------------------------------
                 # Resumen final
